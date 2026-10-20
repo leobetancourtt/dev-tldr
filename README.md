@@ -14,6 +14,39 @@ Output: `tldr-<KEY or slug>.md` (English, ~250 words max) in `OUTPUT_DIR` from y
 
 ---
 
+## Quick start (plug and play)
+
+```bash
+git clone git@github.com:leobetancourtt/dev-tldr.git
+cd dev-tldr
+./install.sh            # Windows (PowerShell 7 recommended): .\install.ps1
+```
+
+The wizard walks through six steps and asks for everything it needs:
+
+| Step | What it does | What it asks you |
+|---|---|---|
+| 1. Prerequisites | Detects `claude`, `gh`, `docker`, `python3` | Nothing |
+| 2. Target | Claude Code, Claude Desktop or both | Your choice |
+| 3. Scope | Writes `~/.claude/dev-tldr.config.md` and checks your Jira domain is reachable | Jira domain, Jira projects, Confluence spaces, GitHub org/repos, Slack channels, output folder (all optional) |
+| 4. GitHub credential | Reuses your `gh` login, or takes a pasted token, and validates it against GitHub | Which option |
+| 5. Claude Code | Installs the skill and registers Atlassian, Slack and GitHub (skips any already present) | Y/n per server |
+| 6. Claude Desktop | Builds `dist/dev-tldr.zip`, writes the GitHub (Docker) server into the Desktop config with a backup | Y/n |
+
+It finishes by running a doctor check. Re-run it any time with `./install.sh --doctor`. For unattended installs use `./install.sh --yes` with env vars (`TARGET`, `JIRA_DOMAIN`, `JIRA_PROJECTS`, `CONFLUENCE_SPACES`, `GITHUB_ORG`, `GITHUB_REPOS`, `SLACK_CHANNELS`, `OUTPUT_DIR`, `GITHUB_TOKEN_SOURCE`, `GITHUB_PAT`).
+
+**Three things no script can do for you** (they need your browser or an admin):
+
+1. Log in to **Atlassian**: in Claude Code run `/mcp` and pick `atlassian`; in Claude Desktop use Settings > Connectors > Atlassian.
+2. Log in to **Slack** the same way. Your workspace admin must have approved the Slack MCP integration.
+3. In Claude Desktop, upload `dist/dev-tldr.zip` (Settings > Capabilities > Skills > Upload skill) and connect the Atlassian and Slack connectors. Connectors can't be added by script.
+
+Token note: choosing "use my `gh` login" stores a token with write-capable scopes in your Claude config. The skill itself is read-only, but if you want the credential to be read-only too, pick the fine-grained token option.
+
+The sections below are the manual equivalent of the wizard, useful for troubleshooting.
+
+---
+
 ## Repo layout
 
 ```
@@ -23,38 +56,17 @@ skills/dev-tldr/
 install.sh / install.ps1        <- installers (macOS-Linux / Windows)
 ```
 
-## 1. Get the repo
-
-```bash
-git clone git@github.com:leobetancourtt/dev-tldr.git
-cd dev-tldr
-```
+## Manual setup
 
 No git? Download the ZIP from the repo page, unzip, and open a terminal in that folder.
 
----
-
-## 2. Install the skill
+### Install the skill
 
 Pick the app you use. You can do both.
 
-### Option A: Claude Code (CLI)
+#### Option A: Claude Code (CLI)
 
 Prerequisite: Claude Code installed and logged in.
-
-**With the script (recommended)**
-
-```bash
-# macOS / Linux
-./install.sh --config
-
-# Windows (PowerShell)
-.\install.ps1 -Config
-```
-
-This copies the skill to `~/.claude/skills/dev-tldr/` and creates `~/.claude/dev-tldr.config.md` if missing.
-
-**Manually**
 
 ```bash
 # personal (all projects)
@@ -68,7 +80,7 @@ cp -R skills/dev-tldr .claude/skills/
 
 The folder must be named `dev-tldr` and contain `SKILL.md` directly. Restart Claude Code afterwards, then check with `/skills`.
 
-### Option B: Claude Desktop
+#### Option B: Claude Desktop
 
 Prerequisites: a plan with Skills access and "Code execution and file creation" enabled in Settings > Capabilities.
 
@@ -87,7 +99,7 @@ Menu labels vary slightly between app versions.
 
 ---
 
-## 3. Connect your sources
+### Connect your sources
 
 The skill uses whatever connectors/MCP servers exist. Connect all three for full coverage. Anything missing shows as unavailable in Coverage; the skill still runs.
 
@@ -156,7 +168,7 @@ Create a [fine-grained personal access token](https://github.com/settings/person
 
 ---
 
-## 4. Configure (optional)
+### Configure (optional)
 
 ```bash
 cp skills/dev-tldr/references/config.example.md ~/.claude/dev-tldr.config.md
@@ -177,9 +189,11 @@ Never put tokens in this file. Without it the skill still works, just with broad
 
 ---
 
-## 5. Verify
+---
 
-1. Connectors: `claude mcp list` (Code) or Settings > Connectors (Desktop) show Atlassian, Slack and GitHub as connected.
+## Verify
+
+1. Run `./install.sh --doctor`, or check connectors: `claude mcp list` (Code) or Settings > Connectors (Desktop) show Atlassian, Slack and GitHub as connected.
 2. Run `tldr <a ticket key you know>`.
 3. Open the generated file and check:
    - every numbered point has link, author and date;
