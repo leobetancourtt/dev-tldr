@@ -26,7 +26,7 @@ install.sh / install.ps1        <- installers (macOS-Linux / Windows)
 ## 1. Get the repo
 
 ```bash
-git clone <YOUR-REPO-URL> dev-tldr
+git clone git@github.com:leobetancourtt/dev-tldr.git
 cd dev-tldr
 ```
 
