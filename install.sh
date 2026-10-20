@@ -10,6 +10,7 @@
 #   TARGET=code|desktop|both  JIRA_DOMAIN  JIRA_PROJECTS  CONFLUENCE_SPACES
 #   GITHUB_ORG  GITHUB_REPOS  SLACK_CHANNELS  OUTPUT_DIR
 #   GITHUB_TOKEN_SOURCE=gh|paste|skip   GITHUB_PAT (when source=paste)
+#   ATLASSIAN_AUTH=oauth|token   ATLASSIAN_EMAIL  ATLASSIAN_API_TOKEN (when auth=token)
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -185,8 +186,32 @@ if [ "$DO_CODE" = 1 ]; then
   # Atlassian
   if mcp_has atlassian; then ok "Atlassian already connected (skipped)"
   elif confirm "Add Atlassian (Jira + Confluence) MCP server?" y; then
-    claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v1/mcp/authv2 >/dev/null 2>&1 \
-      && ok "Atlassian added (login pending)" || bad "Could not add Atlassian. Run: claude mcp add --transport http atlassian https://mcp.atlassian.com/v1/mcp/authv2"
+    AAUTH="${ATLASSIAN_AUTH:-}"
+    if [ -z "$AAUTH" ]; then
+      echo "    1) Browser login (OAuth) - default"
+      echo "    2) API token, no browser (your Atlassian admin must enable this for the org)"
+      c="$(ask 'Choose' 1)"; [ "$c" = 2 ] && AAUTH=token || AAUTH=oauth
+    fi
+    if [ "$AAUTH" = token ]; then
+      echo "    Create a token: https://id.atlassian.com/manage-profile/security/api-tokens"
+      AEMAIL="$(ask 'Atlassian account email' "${ATLASSIAN_EMAIL:-}")"
+      ATOK="${ATLASSIAN_API_TOKEN:-}"
+      if [ -z "$ATOK" ] && [ "$YES" = 0 ]; then read -r -s -p "  Paste API token (hidden): " ATOK </dev/tty; echo; fi
+      if [ -z "$AEMAIL" ] || [ -z "$ATOK" ]; then bad "Email and token are required for token auth. Skipped."
+      else
+        if [ -n "$JIRA_DOMAIN" ] && have curl; then
+          code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -u "$AEMAIL:$ATOK" "https://$JIRA_DOMAIN/rest/api/3/myself" || true)"
+          [ "$code" = 200 ] && ok "Token accepted by $JIRA_DOMAIN" || warn "Could not verify the token against $JIRA_DOMAIN (HTTP $code). Scoped tokens can still work with MCP; continuing."
+        fi
+        B64="$(printf '%s' "$AEMAIL:$ATOK" | base64 | tr -d '\n')"
+        claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v2/mcp -H "Authorization: Basic $B64" >/dev/null 2>&1 \
+          && ok "Atlassian added with API token (no login needed)" \
+          || bad "Could not add Atlassian. If your admin hasn't enabled API-token auth, re-run and choose browser login."
+      fi
+    else
+      claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v1/mcp/authv2 >/dev/null 2>&1 \
+        && ok "Atlassian added (login pending)" || bad "Could not add Atlassian. Run: claude mcp add --transport http atlassian https://mcp.atlassian.com/v1/mcp/authv2"
+    fi
   fi
   # Slack
   if mcp_has slack; then ok "Slack already connected (skipped)"
@@ -249,7 +274,7 @@ fi
 doctor
 echo
 printf '\033[1mAlmost done. Remaining manual logins:\033[0m\n'
-[ "$DO_CODE" = 1 ] && echo "  Claude Code: start 'claude', run /mcp, and log in to atlassian and slack."
+[ "$DO_CODE" = 1 ] && echo "  Claude Code: start 'claude', run /mcp, and log in to each server marked 'Needs authentication' (Slack always; Atlassian unless you used an API token)."
 [ "$DO_DESKTOP" = 1 ] && echo "  Claude Desktop: connect Atlassian and Slack under Settings > Connectors."
 echo "  Then try:  tldr <a-ticket-key-you-know>"
 echo "  Re-check any time with: ./install.sh --doctor"

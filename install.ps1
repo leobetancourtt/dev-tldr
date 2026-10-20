@@ -174,8 +174,34 @@ if ($doCode) {
 
     if (McpHas "atlassian") { Ok "Atlassian already connected (skipped)" }
     elseif (Confirm "Add Atlassian (Jira + Confluence) MCP server?" "y") {
-        & claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v1/mcp/authv2 *> $null
-        if ($LASTEXITCODE -eq 0) { Ok "Atlassian added (login pending)" } else { Bad "Could not add Atlassian. Run: claude mcp add --transport http atlassian https://mcp.atlassian.com/v1/mcp/authv2" }
+        $aauth = EnvOr "ATLASSIAN_AUTH"
+        if (-not $aauth) {
+            Write-Host "    1) Browser login (OAuth) - default"
+            Write-Host "    2) API token, no browser (your Atlassian admin must enable this for the org)"
+            $aauth = if ((Ask "Choose" "1") -eq "2") { "token" } else { "oauth" }
+        }
+        if ($aauth -eq "token") {
+            Write-Host "    Create a token: https://id.atlassian.com/manage-profile/security/api-tokens"
+            $aemail = Ask "Atlassian account email" (EnvOr "ATLASSIAN_EMAIL")
+            $atok = EnvOr "ATLASSIAN_API_TOKEN"
+            if (-not $atok -and -not $Yes) {
+                $sec = Read-Host "  Paste API token (hidden)" -AsSecureString
+                $atok = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+            }
+            if (-not $aemail -or -not $atok) { Bad "Email and token are required for token auth. Skipped." }
+            else {
+                $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("${aemail}:${atok}"))
+                if ($jiraDomain) {
+                    try { Invoke-RestMethod -TimeoutSec 8 -Headers @{ Authorization = "Basic $b64" } "https://$jiraDomain/rest/api/3/myself" | Out-Null; Ok "Token accepted by $jiraDomain" }
+                    catch { Warn "Could not verify the token against $jiraDomain. Scoped tokens can still work with MCP; continuing." }
+                }
+                & claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v2/mcp -H "Authorization: Basic $b64" *> $null
+                if ($LASTEXITCODE -eq 0) { Ok "Atlassian added with API token (no login needed)" } else { Bad "Could not add Atlassian. If your admin hasn't enabled API-token auth, re-run and choose browser login." }
+            }
+        } else {
+            & claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v1/mcp/authv2 *> $null
+            if ($LASTEXITCODE -eq 0) { Ok "Atlassian added (login pending)" } else { Bad "Could not add Atlassian. Run: claude mcp add --transport http atlassian https://mcp.atlassian.com/v1/mcp/authv2" }
+        }
     }
     if (McpHas "slack") { Ok "Slack already connected (skipped)" }
     elseif (Confirm "Add Slack MCP server? (your workspace admin must approve it)" "y") {
@@ -228,7 +254,7 @@ if ($doDesktop) {
 Run-Doctor
 Write-Host ""
 Write-Host "Almost done. Remaining manual logins:" -ForegroundColor Cyan
-if ($doCode)    { Write-Host "  Claude Code: start 'claude', run /mcp, and log in to atlassian and slack." }
+if ($doCode)    { Write-Host "  Claude Code: start 'claude', run /mcp, and log in to each server marked 'Needs authentication' (Slack always; Atlassian unless you used an API token)." }
 if ($doDesktop) { Write-Host "  Claude Desktop: connect Atlassian and Slack under Settings > Connectors." }
 Write-Host "  Then try:  tldr <a-ticket-key-you-know>"
 Write-Host "  Re-check any time with: .\install.ps1 -Doctor"

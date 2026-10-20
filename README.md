@@ -30,16 +30,24 @@ The wizard walks through six steps and asks for everything it needs:
 | 2. Target | Claude Code, Claude Desktop or both | Your choice |
 | 3. Scope | Writes `~/.claude/dev-tldr.config.md` and checks your Jira domain is reachable | Jira domain, Jira projects, Confluence spaces, GitHub org/repos, Slack channels, output folder (all optional) |
 | 4. GitHub credential | Reuses your `gh` login, or takes a pasted token, and validates it against GitHub | Which option |
-| 5. Claude Code | Installs the skill and registers Atlassian, Slack and GitHub (skips any already present) | Y/n per server |
+| 5. Claude Code | Installs the skill and registers Atlassian, Slack and GitHub (skips any already present) | Y/n per server; Atlassian: browser login or API token (email + token) |
 | 6. Claude Desktop | Builds `dist/dev-tldr.zip`, writes the GitHub (Docker) server into the Desktop config with a backup | Y/n |
 
-It finishes by running a doctor check. Re-run it any time with `./install.sh --doctor`. For unattended installs use `./install.sh --yes` with env vars (`TARGET`, `JIRA_DOMAIN`, `JIRA_PROJECTS`, `CONFLUENCE_SPACES`, `GITHUB_ORG`, `GITHUB_REPOS`, `SLACK_CHANNELS`, `OUTPUT_DIR`, `GITHUB_TOKEN_SOURCE`, `GITHUB_PAT`).
+It finishes by running a doctor check. Re-run it any time with `./install.sh --doctor`. For unattended installs use `./install.sh --yes` with env vars (`TARGET`, `JIRA_DOMAIN`, `JIRA_PROJECTS`, `CONFLUENCE_SPACES`, `GITHUB_ORG`, `GITHUB_REPOS`, `SLACK_CHANNELS`, `OUTPUT_DIR`, `GITHUB_TOKEN_SOURCE`, `GITHUB_PAT`, `ATLASSIAN_AUTH`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`).
 
-**Three things no script can do for you** (they need your browser or an admin):
+**Token or login? It depends on the source**
 
-1. Log in to **Atlassian**: in Claude Code run `/mcp` and pick `atlassian`; in Claude Desktop use Settings > Connectors > Atlassian.
-2. Log in to **Slack** the same way. Your workspace admin must have approved the Slack MCP integration.
-3. In Claude Desktop, upload `dist/dev-tldr.zip` (Settings > Capabilities > Skills > Upload skill) and connect the Atlassian and Slack connectors. Connectors can't be added by script.
+| Source | Token (no browser) | Browser login |
+|---|---|---|
+| GitHub | Yes, always. The wizard reuses `gh auth token` or a pasted fine-grained PAT. If `gh auth login` is waiting for a token, choose "Paste an authentication token". | Not needed |
+| Atlassian | Yes, in Claude Code only, if your Atlassian admin enabled [API-token auth](https://support.atlassian.com/atlassian-ai-gateway/docs/configure-authentication-via-api-token/) for the Rovo MCP server. Needs your account email plus an [API token](https://id.atlassian.com/manage-profile/security/api-tokens). | Default. Works in Code and Desktop |
+| Slack | No. The official Slack MCP server only accepts OAuth from an admin-approved app. Don't paste `xoxp`/`xoxb` tokens into third-party servers. | Required |
+
+**What no script can do for you** (it needs your browser or an admin):
+
+1. Log in to **Slack**: in Claude Code run `/mcp` and pick `slack`; in Claude Desktop use Settings > Connectors > Slack. Your workspace admin must have approved the Slack MCP integration.
+2. Log in to **Atlassian** the same way, unless you chose API-token auth.
+3. In Claude Desktop, upload `dist/dev-tldr.zip` (Settings > Capabilities > Skills > Upload skill) and connect the Atlassian and Slack connectors. Connectors can't be added by script, and Desktop connectors use browser login only.
 
 Token note: choosing "use my `gh` login" stores a token with write-capable scopes in your Claude config. The skill itself is read-only, but if you want the credential to be read-only too, pick the fine-grained token option.
 
