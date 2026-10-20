@@ -28,7 +28,7 @@ The wizard walks through six steps and asks for everything it needs:
 |---|---|---|
 | 1. Prerequisites | Detects `claude`, `gh`, `docker`, `python3` | Nothing |
 | 2. Target | Claude Code, Claude Desktop or both | Your choice |
-| 3. Scope | Writes `~/.claude/dev-tldr.config.md` and checks your Jira domain is reachable | Jira domain, Jira projects, Confluence spaces, GitHub org/repos, Slack channels, output folder (all optional) |
+| 3. Endpoints and scope | Prints the endpoints from `endpoints.env`, writes `~/.claude/dev-tldr.config.md` and checks your Jira domain is reachable | Jira domain, Jira projects, Confluence spaces, GitHub org/repos, Slack channels, output folder (all optional) |
 | 4. GitHub credential | Reuses your `gh` login, or takes a pasted token, and validates it against GitHub | Which option |
 | 5. Claude Code | Installs the skill and registers Atlassian, Slack and GitHub (skips any already present) | Y/n per server; Atlassian: browser login or API token (email + token) |
 | 6. Claude Desktop | Builds `dist/dev-tldr.zip`, writes the GitHub (Docker) server into the Desktop config with a backup | Y/n |
@@ -51,6 +51,26 @@ It finishes by running a doctor check. Re-run it any time with `./install.sh --d
 
 Token note: choosing "use my `gh` login" stores a token with write-capable scopes in your Claude config. The skill itself is read-only, but if you want the credential to be read-only too, pick the fine-grained token option.
 
+### Endpoints (company URLs)
+
+Every MCP/API URL the installers use lives in [`endpoints.env`](endpoints.env), not in the scripts. The defaults are the public vendor URLs. If your company provides its own (a gateway, GitHub Enterprise, an internal registry mirror, an internal Slack app), change them there and re-run the installer.
+
+| Variable | Used for | Default |
+|---|---|---|
+| `ATLASSIAN_MCP_URL_OAUTH` | Atlassian MCP, browser login | `https://mcp.atlassian.com/v1/mcp/authv2` |
+| `ATLASSIAN_MCP_URL_TOKEN` | Atlassian MCP, API-token auth | `https://mcp.atlassian.com/v2/mcp` |
+| `SLACK_MCP_URL` | Slack MCP server | `https://mcp.slack.com/mcp` |
+| `SLACK_OAUTH_CLIENT_ID` | Client ID of your company's internal Slack app (optional) | empty |
+| `SLACK_OAUTH_CALLBACK_PORT` | OAuth callback port when a client ID is set | `3118` |
+| `GITHUB_MCP_URL` | GitHub MCP server (Claude Code) | `https://api.githubcopilot.com/mcp` |
+| `GITHUB_API_URL` | Token validation. GitHub Enterprise Server: `https://HOST/api/v3` | `https://api.github.com` |
+| `GITHUB_MCP_DOCKER_IMAGE` | Local GitHub server image for Claude Desktop | `ghcr.io/github/github-mcp-server` |
+| `GITHUB_HOST` | GitHub Enterprise host passed to the local server (optional) | empty |
+
+Precedence, highest first: real environment variables, then `endpoints.local.env`, then `endpoints.env`. Put machine- or team-specific values in `endpoints.local.env` (git-ignored) so you never commit them, or edit `endpoints.env` directly if the whole team shares the same URLs. `ENDPOINTS_FILE=/path/to/file ./install.sh` loads another file first. The installer prints the endpoints it will use before it changes anything.
+
+The manual commands further down show the default URLs; substitute your own if you changed them.
+
 The sections below are the manual equivalent of the wizard, useful for troubleshooting.
 
 ---
@@ -61,6 +81,8 @@ The sections below are the manual equivalent of the wizard, useful for troublesh
 skills/dev-tldr/
   SKILL.md                      <- the skill
   references/config.example.md  <- optional scope config
+endpoints.env                   <- MCP/API URLs used by the installers (edit for your company)
+endpoints.local.env             <- optional local overrides (git-ignored)
 install.sh / install.ps1        <- installers (macOS-Linux / Windows)
 ```
 

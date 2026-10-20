@@ -11,6 +11,9 @@
 #   GITHUB_ORG  GITHUB_REPOS  SLACK_CHANNELS  OUTPUT_DIR
 #   GITHUB_TOKEN_SOURCE=gh|paste|skip   GITHUB_PAT (when source=paste)
 #   ATLASSIAN_AUTH=oauth|token   ATLASSIAN_EMAIL  ATLASSIAN_API_TOKEN (when auth=token)
+#
+# Endpoints (MCP/API URLs) live in endpoints.env; override in endpoints.local.env,
+# or point ENDPOINTS_FILE at another file.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,6 +49,31 @@ confirm() { # confirm "Question" default(y|n)
 }
 
 [ -f "$SRC/SKILL.md" ] || { echo "ERROR: $SRC/SKILL.md not found. Run from the repo root." >&2; exit 1; }
+
+# ---- endpoints: env vars > endpoints.local.env > endpoints.env
+load_env() { # load_env FILE  (only sets variables that are not already set)
+  local f="$1" line k v
+  [ -f "$f" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|\#*) continue ;; esac
+    k="${line%%=*}"; v="${line#*=}"
+    k="$(printf '%s' "$k" | tr -d ' ')"
+    v="${v%\"}"; v="${v#\"}"; v="${v%$'\r'}"
+    [[ "$k" =~ ^[A-Z][A-Z0-9_]*$ ]] || continue
+    [ -n "${!k:-}" ] || export "$k=$v"
+  done < "$f"
+}
+EP_FILES=""
+for f in "${ENDPOINTS_FILE:-}" "$ROOT/endpoints.local.env" "$ROOT/endpoints.env"; do
+  [ -n "$f" ] && [ -f "$f" ] && { load_env "$f"; EP_FILES="$EP_FILES $(basename "$f")"; }
+done
+ATLASSIAN_MCP_URL_OAUTH="${ATLASSIAN_MCP_URL_OAUTH:-https://mcp.atlassian.com/v1/mcp/authv2}"
+ATLASSIAN_MCP_URL_TOKEN="${ATLASSIAN_MCP_URL_TOKEN:-https://mcp.atlassian.com/v2/mcp}"
+SLACK_MCP_URL="${SLACK_MCP_URL:-https://mcp.slack.com/mcp}"
+SLACK_OAUTH_CALLBACK_PORT="${SLACK_OAUTH_CALLBACK_PORT:-3118}"
+GITHUB_MCP_URL="${GITHUB_MCP_URL:-https://api.githubcopilot.com/mcp}"
+GITHUB_API_URL="${GITHUB_API_URL:-https://api.github.com}"
+GITHUB_MCP_DOCKER_IMAGE="${GITHUB_MCP_DOCKER_IMAGE:-ghcr.io/github/github-mcp-server}"
 
 DEST="$HOME/.claude/skills/dev-tldr"
 CFG="$HOME/.claude/dev-tldr.config.md"
@@ -97,6 +125,11 @@ have gh     && ok "gh CLI" || warn "gh CLI not found (optional)"
 have docker && ok "docker" || warn "docker not found (needed only for GitHub on Claude Desktop)"
 have python3 && ok "python3" || warn "python3 not found (needed only to edit Desktop config)"
 have curl   && ok "curl" || warn "curl not found (Jira domain check skipped)"
+ok "Endpoints from:${EP_FILES:- (built-in defaults)}"
+echo "      atlassian(oauth): $ATLASSIAN_MCP_URL_OAUTH"
+echo "      atlassian(token): $ATLASSIAN_MCP_URL_TOKEN"
+echo "      slack:            $SLACK_MCP_URL${SLACK_OAUTH_CLIENT_ID:+  (client id set)}"
+echo "      github:           $GITHUB_MCP_URL  (api: $GITHUB_API_URL)"
 
 step "2/6  Where do you use Claude?"
 TARGET="${TARGET:-}"
@@ -173,7 +206,7 @@ case "$GITHUB_TOKEN_SOURCE" in
   *)     warn "GitHub skipped. Coverage will show GitHub unavailable." ;;
 esac
 if [ -n "$TOKEN" ] && have curl; then
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -H "Authorization: Bearer $TOKEN" https://api.github.com/user || true)"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -H "Authorization: Bearer $TOKEN" "$GITHUB_API_URL/user" || true)"
   [ "$code" = 200 ] && ok "Token accepted by GitHub" || warn "GitHub answered HTTP $code for this token (expired, or needs SSO authorization)"
 fi
 
@@ -204,28 +237,33 @@ if [ "$DO_CODE" = 1 ]; then
           [ "$code" = 200 ] && ok "Token accepted by $JIRA_DOMAIN" || warn "Could not verify the token against $JIRA_DOMAIN (HTTP $code). Scoped tokens can still work with MCP; continuing."
         fi
         B64="$(printf '%s' "$AEMAIL:$ATOK" | base64 | tr -d '\n')"
-        claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v2/mcp -H "Authorization: Basic $B64" >/dev/null 2>&1 \
+        claude mcp add --transport http --scope user atlassian "$ATLASSIAN_MCP_URL_TOKEN" -H "Authorization: Basic $B64" >/dev/null 2>&1 \
           && ok "Atlassian added with API token (no login needed)" \
           || bad "Could not add Atlassian. If your admin hasn't enabled API-token auth, re-run and choose browser login."
       fi
     else
-      claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v1/mcp/authv2 >/dev/null 2>&1 \
-        && ok "Atlassian added (login pending)" || bad "Could not add Atlassian. Run: claude mcp add --transport http atlassian https://mcp.atlassian.com/v1/mcp/authv2"
+      claude mcp add --transport http --scope user atlassian "$ATLASSIAN_MCP_URL_OAUTH" >/dev/null 2>&1 \
+        && ok "Atlassian added (login pending)" || bad "Could not add Atlassian. Run: claude mcp add --transport http atlassian $ATLASSIAN_MCP_URL_OAUTH"
     fi
   fi
   # Slack
   if mcp_has slack; then ok "Slack already connected (skipped)"
   elif confirm "Add Slack MCP server? (your workspace admin must approve it)" y; then
-    claude mcp add --transport http --scope user slack https://mcp.slack.com/mcp >/dev/null 2>&1 \
-      && ok "Slack added (login pending)" || bad "Could not add Slack. Alternative inside Claude Code: /plugin install slack@claude-plugins-official"
+    if [ -n "${SLACK_OAUTH_CLIENT_ID:-}" ]; then
+      sjson="{\"type\":\"http\",\"url\":\"$SLACK_MCP_URL\",\"oauth\":{\"clientId\":\"$SLACK_OAUTH_CLIENT_ID\",\"callbackPort\":$SLACK_OAUTH_CALLBACK_PORT}}"
+      claude mcp add-json --scope user slack "$sjson" >/dev/null 2>&1; rc=$?
+    else
+      claude mcp add --transport http --scope user slack "$SLACK_MCP_URL" >/dev/null 2>&1; rc=$?
+    fi
+    [ "$rc" = 0 ] && ok "Slack added (login pending)" || bad "Could not add Slack. Alternative inside Claude Code: /plugin install slack@claude-plugins-official"
   fi
   # GitHub
   if [ -n "$TOKEN" ]; then
     if mcp_has github; then ok "GitHub already configured (skipped)"
     else
-      json="{\"type\":\"http\",\"url\":\"https://api.githubcopilot.com/mcp\",\"headers\":{\"Authorization\":\"Bearer $TOKEN\"}}"
+      json="{\"type\":\"http\",\"url\":\"$GITHUB_MCP_URL\",\"headers\":{\"Authorization\":\"Bearer $TOKEN\"}}"
       if claude mcp add-json --scope user github "$json" >/dev/null 2>&1 \
-         || claude mcp add --transport http --scope user github https://api.githubcopilot.com/mcp -H "Authorization: Bearer $TOKEN" >/dev/null 2>&1; then
+         || claude mcp add --transport http --scope user github "$GITHUB_MCP_URL" -H "Authorization: Bearer $TOKEN" >/dev/null 2>&1; then
         ok "GitHub added"
       else bad "Could not add GitHub. See README section 3."; fi
     fi
@@ -245,17 +283,18 @@ if [ "$DO_DESKTOP" = 1 ]; then
     elif confirm "Add GitHub (Docker) server to Claude Desktop config? A backup is made." y; then
       mkdir -p "$(dirname "$DESKTOP_CFG")"
       [ -f "$DESKTOP_CFG" ] && cp "$DESKTOP_CFG" "$DESKTOP_CFG.bak.$(date +%s)"
-      if python3 - "$DESKTOP_CFG" "$TOKEN" <<'PY'
+      if python3 - "$DESKTOP_CFG" "$TOKEN" "$GITHUB_MCP_DOCKER_IMAGE" "${GITHUB_HOST:-}" <<'PY'
 import json, os, sys
-path, token = sys.argv[1], sys.argv[2]
+path, token, image, host = sys.argv[1:5]
 cfg = {}
 if os.path.exists(path) and os.path.getsize(path):
     with open(path) as f: cfg = json.load(f)
-cfg.setdefault("mcpServers", {})["github"] = {
-    "command": "docker",
-    "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"],
-    "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": token},
-}
+args = ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN"]
+env = {"GITHUB_PERSONAL_ACCESS_TOKEN": token}
+if host:
+    args += ["-e", "GITHUB_HOST"]
+    env["GITHUB_HOST"] = host
+cfg.setdefault("mcpServers", {})["github"] = {"command": "docker", "args": args + [image], "env": env}
 with open(path, "w") as f: json.dump(cfg, f, indent=2)
 PY
       then ok "GitHub server written to Desktop config (restart Claude Desktop)"
@@ -264,7 +303,7 @@ PY
   fi
   echo
   echo "    Manual steps in Claude Desktop (no API for these):"
-  echo "      - Settings > Connectors > Atlassian > Connect  (or custom connector: https://mcp.atlassian.com/v1/mcp/authv2)"
+  echo "      - Settings > Connectors > Atlassian > Connect  (or custom connector: $ATLASSIAN_MCP_URL_OAUTH)"
   echo "      - Settings > Connectors > Slack > Connect"
   echo "      - Restart Claude Desktop, make sure the dev-tldr skill is toggled on"
 else

@@ -6,7 +6,8 @@
 #
 # Env vars (defaults / -Yes mode): TARGET=code|desktop|both JIRA_DOMAIN JIRA_PROJECTS
 #   CONFLUENCE_SPACES GITHUB_ORG GITHUB_REPOS SLACK_CHANNELS OUTPUT_DIR
-#   GITHUB_TOKEN_SOURCE=gh|paste|skip  GITHUB_PAT
+#   GITHUB_TOKEN_SOURCE=gh|paste|skip  GITHUB_PAT  ATLASSIAN_AUTH=oauth|token ATLASSIAN_EMAIL ATLASSIAN_API_TOKEN
+# Endpoints (MCP/API URLs) live in endpoints.env; override in endpoints.local.env or set ENDPOINTS_FILE.
 param([switch]$Yes, [switch]$Doctor, [switch]$Zip)
 
 $ErrorActionPreference = "Continue"
@@ -21,6 +22,35 @@ function Bad($m)  { Write-Host "  [x]  $m" -ForegroundColor Red }
 function Step($m) { Write-Host ""; Write-Host $m -ForegroundColor Cyan }
 function Have($n) { [bool](Get-Command $n -ErrorAction SilentlyContinue) }
 function EnvOr($n) { $v = [Environment]::GetEnvironmentVariable($n); if ($v) { $v } else { "" } }
+
+# ---- endpoints: env vars > endpoints.local.env > endpoints.env
+function Load-Env($path) {  # only sets variables that are not already set
+    if (-not (Test-Path $path)) { return $false }
+    foreach ($line in Get-Content $path) {
+        $t = $line.Trim()
+        if (-not $t -or $t.StartsWith("#")) { continue }
+        $i = $t.IndexOf("=")
+        if ($i -lt 1) { continue }
+        $k = $t.Substring(0, $i).Trim(); $v = $t.Substring($i + 1).Trim().Trim('"')
+        if ($k -notmatch '^[A-Z][A-Z0-9_]*$') { continue }
+        if (-not (EnvOr $k)) { [Environment]::SetEnvironmentVariable($k, $v, "Process") }
+    }
+    return $true
+}
+$epFiles = @()
+foreach ($f in @((EnvOr "ENDPOINTS_FILE"), (Join-Path $PSScriptRoot "endpoints.local.env"), (Join-Path $PSScriptRoot "endpoints.env"))) {
+    if ($f -and (Load-Env $f)) { $epFiles += (Split-Path $f -Leaf) }
+}
+function EpOr($n, $default) { $v = EnvOr $n; if ($v) { $v } else { $default } }
+$AtlOauthUrl = EpOr "ATLASSIAN_MCP_URL_OAUTH" "https://mcp.atlassian.com/v1/mcp/authv2"
+$AtlTokenUrl = EpOr "ATLASSIAN_MCP_URL_TOKEN" "https://mcp.atlassian.com/v2/mcp"
+$SlackUrl    = EpOr "SLACK_MCP_URL" "https://mcp.slack.com/mcp"
+$SlackClient = EnvOr "SLACK_OAUTH_CLIENT_ID"
+$SlackPort   = EpOr "SLACK_OAUTH_CALLBACK_PORT" "3118"
+$GhMcpUrl    = EpOr "GITHUB_MCP_URL" "https://api.githubcopilot.com/mcp"
+$GhApiUrl    = EpOr "GITHUB_API_URL" "https://api.github.com"
+$GhImage     = EpOr "GITHUB_MCP_DOCKER_IMAGE" "ghcr.io/github/github-mcp-server"
+$GhHost      = EnvOr "GITHUB_HOST"
 
 function Ask($prompt, $default = "") {
     if ($Yes) { return $default }
@@ -81,6 +111,12 @@ Step "1/6  Prerequisites"
 if (Have "claude") { Ok "claude CLI" } else { Warn "claude CLI not found (Claude Code option unavailable)" }
 if (Have "gh")     { Ok "gh CLI" } else { Warn "gh CLI not found (optional)" }
 if (Have "docker") { Ok "docker" } else { Warn "docker not found (needed only for GitHub on Claude Desktop)" }
+$epLabel = if ($epFiles.Count) { $epFiles -join ", " } else { "built-in defaults" }
+Ok "Endpoints from: $epLabel"
+Write-Host "      atlassian(oauth): $AtlOauthUrl"
+Write-Host "      atlassian(token): $AtlTokenUrl"
+Write-Host "      slack:            $SlackUrl$(if ($SlackClient) { '  (client id set)' })"
+Write-Host "      github:           $GhMcpUrl  (api: $GhApiUrl)"
 
 Step "2/6  Where do you use Claude?"
 $target = EnvOr "TARGET"
@@ -160,7 +196,7 @@ switch ($src) {
 }
 if ($token) {
     try {
-        Invoke-RestMethod -TimeoutSec 8 -Headers @{ Authorization = "Bearer $token" } "https://api.github.com/user" | Out-Null
+        Invoke-RestMethod -TimeoutSec 8 -Headers @{ Authorization = "Bearer $token" } "$GhApiUrl/user" | Out-Null
         Ok "Token accepted by GitHub"
     } catch { Warn "GitHub rejected or could not check this token (expired, or needs SSO authorization)" }
 }
@@ -195,24 +231,29 @@ if ($doCode) {
                     try { Invoke-RestMethod -TimeoutSec 8 -Headers @{ Authorization = "Basic $b64" } "https://$jiraDomain/rest/api/3/myself" | Out-Null; Ok "Token accepted by $jiraDomain" }
                     catch { Warn "Could not verify the token against $jiraDomain. Scoped tokens can still work with MCP; continuing." }
                 }
-                & claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v2/mcp -H "Authorization: Basic $b64" *> $null
+                & claude mcp add --transport http --scope user atlassian $AtlTokenUrl -H "Authorization: Basic $b64" *> $null
                 if ($LASTEXITCODE -eq 0) { Ok "Atlassian added with API token (no login needed)" } else { Bad "Could not add Atlassian. If your admin hasn't enabled API-token auth, re-run and choose browser login." }
             }
         } else {
-            & claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v1/mcp/authv2 *> $null
-            if ($LASTEXITCODE -eq 0) { Ok "Atlassian added (login pending)" } else { Bad "Could not add Atlassian. Run: claude mcp add --transport http atlassian https://mcp.atlassian.com/v1/mcp/authv2" }
+            & claude mcp add --transport http --scope user atlassian $AtlOauthUrl *> $null
+            if ($LASTEXITCODE -eq 0) { Ok "Atlassian added (login pending)" } else { Bad "Could not add Atlassian. Run: claude mcp add --transport http atlassian $AtlOauthUrl" }
         }
     }
     if (McpHas "slack") { Ok "Slack already connected (skipped)" }
     elseif (Confirm "Add Slack MCP server? (your workspace admin must approve it)" "y") {
-        & claude mcp add --transport http --scope user slack https://mcp.slack.com/mcp *> $null
+        if ($SlackClient) {
+            $sjson = @{ type = "http"; url = $SlackUrl; oauth = @{ clientId = $SlackClient; callbackPort = [int]$SlackPort } } | ConvertTo-Json -Compress
+            & claude mcp add-json --scope user slack $sjson *> $null
+        } else {
+            & claude mcp add --transport http --scope user slack $SlackUrl *> $null
+        }
         if ($LASTEXITCODE -eq 0) { Ok "Slack added (login pending)" } else { Bad "Could not add Slack. Alternative inside Claude Code: /plugin install slack@claude-plugins-official" }
     }
     if ($token) {
         if (McpHas "github") { Ok "GitHub already configured (skipped)" }
         else {
             # Legacy form first: on Windows, add-json can fail with 'Invalid input' for HTTP servers.
-            & claude mcp add github --transport http https://api.githubcopilot.com/mcp -H "Authorization: Bearer $token" *> $null
+            & claude mcp add github --transport http $GhMcpUrl -H "Authorization: Bearer $token" *> $null
             if ($LASTEXITCODE -eq 0) { Ok "GitHub added" } else { Bad "Could not add GitHub. See README section 3." }
         }
     }
@@ -234,11 +275,10 @@ if ($doDesktop) {
                     $cfg = Get-Content $DesktopCfg -Raw | ConvertFrom-Json -AsHashtable
                 }
                 if (-not $cfg.ContainsKey("mcpServers")) { $cfg["mcpServers"] = @{} }
-                $cfg["mcpServers"]["github"] = @{
-                    command = "docker"
-                    args = @("run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server")
-                    env = @{ GITHUB_PERSONAL_ACCESS_TOKEN = $token }
-                }
+                $dargs = @("run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN")
+                $denv = @{ GITHUB_PERSONAL_ACCESS_TOKEN = $token }
+                if ($GhHost) { $dargs += @("-e", "GITHUB_HOST"); $denv["GITHUB_HOST"] = $GhHost }
+                $cfg["mcpServers"]["github"] = @{ command = "docker"; args = ($dargs + $GhImage); env = $denv }
                 $cfg | ConvertTo-Json -Depth 10 | Set-Content $DesktopCfg -Encoding UTF8
                 Ok "GitHub server written to Desktop config (restart Claude Desktop)"
             } catch { Bad "Could not edit $DesktopCfg ($($_.Exception.Message)). Backup kept; add it by hand." }
@@ -246,7 +286,7 @@ if ($doDesktop) {
     }
     Write-Host ""
     Write-Host "    Manual steps in Claude Desktop (no API for these):"
-    Write-Host "      - Settings > Connectors > Atlassian > Connect  (or custom connector: https://mcp.atlassian.com/v1/mcp/authv2)"
+    Write-Host "      - Settings > Connectors > Atlassian > Connect  (or custom connector: $AtlOauthUrl)"
     Write-Host "      - Settings > Connectors > Slack > Connect"
     Write-Host "      - Restart Claude Desktop, make sure the dev-tldr skill is toggled on"
 } else { Warn "Skipped (Claude Desktop not selected)" }
