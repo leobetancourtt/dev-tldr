@@ -10,6 +10,9 @@ GITHUB_ORG: your-org
 GITHUB_REPOS: payments-api, benefits-web
 SLACK_CHANNELS: eng-payments, eng-general
 OUTPUT_DIR: ~/dev-tldrs
+MODEL_JIRA: sonnet
+MODEL_SEARCH: haiku
+MODEL_VERIFY: sonnet
 ```
 
-Used only to scope searches and choose the output folder. Never put tokens or secrets here.
+Used only to scope searches, choose the output folder and pick the model of each sub-agent (`haiku`, `sonnet` or `opus`; defaults shown). Never put tokens or secrets here.

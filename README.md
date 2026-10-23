@@ -1,251 +1,132 @@
 # dev-tldr
 
-A Claude skill that turns a **Jira ticket** (key or URL) or an **open question** into a short, evidence-backed `.md` TLDR for developers: max 5 points, each with source link, author and date, plus Links and a Coverage section showing what was searched.
+A **Claude Code** skill that turns a **Jira ticket** (key or URL) or an **open question** into a short, evidence-backed `.md` TLDR for developers: at most 5 points, each with source link, author and date, plus where to start and a Coverage section showing what was searched.
 
-Think "Rovo for devs": it searches **Jira** (incl. comments), **Confluence** (incl. page comments), **GitHub** and **Slack**, and never writes to any of them.
+It walks the ticket tree in **Jira**, then searches **Confluence**, **GitHub** and **Slack** for what the tree points to, and never writes to any of them. Design and output format: [`dev-tldr-output-format.md`](dev-tldr-output-format.md).
+
+> **Claude Code only.** Claude Desktop, Cowork and claude.ai are not supported: GitHub search does not work there, so the skill would silently lose a source. Use the `claude` CLI (or its IDE extensions).
+
+## Use it
+
+In any directory, start `claude` and type:
 
 ```
 tldr PROJ-123
 tldr https://yourorg.atlassian.net/browse/PROJ-123
+resumen del ticket PROJ-123
 what do I need to know before touching the booking sync?
 ```
 
-Output: `tldr-<KEY or slug>.md` (English, ~250 words max) in `OUTPUT_DIR` from your config, else the working directory.
+You can also call it explicitly with `/dev-tldr PROJ-123`. A Confluence, PR or Slack link works too: the skill extracts the Jira key from it.
 
----
+**Output:** `tldr-<KEY or slug>.md` (English, ~250 words) in `OUTPUT_DIR` from your config, else the current directory. Claude replies with the path and a one-line summary.
 
-## Quick start (plug and play)
+**What you get in the file:**
+
+| Section | What it tells you |
+|---|---|
+| Header | Confidence (High / Medium / Low) and the rule that set it |
+| Where this sits | The ticket tree with status: root, parent, siblings |
+| Points 1-5 | Why, What, Where, Constraints, Dependency, each with link, author and date |
+| Unknowns | What the evidence does not settle (`[open]`, `[possible]`, `[inference]`) |
+| Start here | The first concrete step, taken from a source |
+| Coverage | Every source searched, including empty or failed ones, and how many points a verifier confirmed |
+| Check yourself | Three questions to answer from memory |
+
+## Install
+
+Prerequisites: [Claude Code](https://claude.com/claude-code) and the [GitHub CLI](https://cli.github.com) (`brew install gh` on macOS).
 
 ```bash
 git clone git@github.com:leobetancourtt/dev-tldr.git
 cd dev-tldr
-./install.sh            # Windows (PowerShell 7 recommended): .\install.ps1
+./install.sh
 ```
 
-The wizard walks through six steps and asks for everything it needs:
+The script logs you in to GitHub (`gh auth login --hostname github.com --git-protocol https --web`), copies the skill to `~/.claude/skills/dev-tldr`, and adds the Atlassian and Slack servers to Claude Code. Then:
 
-| Step | What it does | What it asks you |
-|---|---|---|
-| 1. Prerequisites | Detects `claude`, `gh`, `docker`, `python3` | Nothing |
-| 2. Target | Claude Code, Claude Desktop or both | Your choice |
-| 3. Endpoints and scope | Prints the endpoints from `endpoints.env`, writes `~/.claude/dev-tldr.config.md` and checks your Jira domain is reachable | Jira domain, Jira projects, Confluence spaces, GitHub org/repos, Slack channels, output folder (all optional) |
-| 4. GitHub credential | Reuses your `gh` login, or takes a pasted token, and validates it against GitHub | Which option |
-| 5. Claude Code | Installs the skill and registers Atlassian, Slack and GitHub (skips any already present) | Y/n per server; Atlassian: browser login or API token (email + token) |
-| 6. Claude Desktop | Builds `dist/dev-tldr.zip`, writes the GitHub (Docker) server into the Desktop config with a backup | Y/n |
+1. Start `claude`, run `/mcp`, and log in to `atlassian` and `slack`.
+2. Check with `/skills` that `dev-tldr` is listed.
+3. Re-check any time with `./install.sh --doctor`.
 
-It finishes by running a doctor check. Re-run it any time with `./install.sh --doctor`. For unattended installs use `./install.sh --yes` with env vars (`TARGET`, `JIRA_DOMAIN`, `JIRA_PROJECTS`, `CONFLUENCE_SPACES`, `GITHUB_ORG`, `GITHUB_REPOS`, `SLACK_CHANNELS`, `OUTPUT_DIR`, `GITHUB_TOKEN_SOURCE`, `GITHUB_PAT`, `ATLASSIAN_AUTH`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN`).
-
-**Token or login? It depends on the source**
-
-| Source | Token (no browser) | Browser login |
-|---|---|---|
-| GitHub | Yes, always. The wizard reuses `gh auth token` or a pasted fine-grained PAT. If `gh auth login` is waiting for a token, choose "Paste an authentication token". | Not needed |
-| Atlassian | Yes, in Claude Code only, if your Atlassian admin enabled [API-token auth](https://support.atlassian.com/atlassian-ai-gateway/docs/configure-authentication-via-api-token/) for the Rovo MCP server. Needs your account email plus an [API token](https://id.atlassian.com/manage-profile/security/api-tokens). | Default. Works in Code and Desktop |
-| Slack | No. The official Slack MCP server only accepts OAuth from an admin-approved app. Don't paste `xoxp`/`xoxb` tokens into third-party servers. | Required |
-
-**What no script can do for you** (it needs your browser or an admin):
-
-1. Log in to **Slack**: in Claude Code run `/mcp` and pick `slack`; in Claude Desktop use Settings > Connectors > Slack. Your workspace admin must have approved the Slack MCP integration.
-2. Log in to **Atlassian** the same way, unless you chose API-token auth.
-3. In Claude Desktop, upload `dist/dev-tldr.zip` (Settings > Capabilities > Skills > Upload skill) and connect the Atlassian and Slack connectors. Connectors can't be added by script, and Desktop connectors use browser login only.
-
-Token note: choosing "use my `gh` login" stores a token with write-capable scopes in your Claude config. The skill itself is read-only, but if you want the credential to be read-only too, pick the fine-grained token option.
-
-### Endpoints (company URLs)
-
-Every MCP/API URL the installers use lives in [`endpoints.env`](endpoints.env), not in the scripts. The defaults are the public vendor URLs. If your company provides its own (a gateway, GitHub Enterprise, an internal registry mirror, an internal Slack app), change them there and re-run the installer.
-
-| Variable | Used for | Default |
-|---|---|---|
-| `ATLASSIAN_MCP_URL_OAUTH` | Atlassian MCP, browser login | `https://mcp.atlassian.com/v1/mcp/authv2` |
-| `ATLASSIAN_MCP_URL_TOKEN` | Atlassian MCP, API-token auth | `https://mcp.atlassian.com/v2/mcp` |
-| `SLACK_MCP_URL` | Slack MCP server | `https://mcp.slack.com/mcp` |
-| `SLACK_OAUTH_CLIENT_ID` | Client ID of your company's internal Slack app (optional) | empty |
-| `SLACK_OAUTH_CALLBACK_PORT` | OAuth callback port when a client ID is set | `3118` |
-| `GITHUB_MCP_URL` | GitHub MCP server (Claude Code) | `https://api.githubcopilot.com/mcp` |
-| `GITHUB_API_URL` | Token validation. GitHub Enterprise Server: `https://HOST/api/v3` | `https://api.github.com` |
-| `GITHUB_MCP_DOCKER_IMAGE` | Local GitHub server image for Claude Desktop | `ghcr.io/github/github-mcp-server` |
-| `GITHUB_HOST` | GitHub Enterprise host passed to the local server (optional) | empty |
-
-Precedence, highest first: real environment variables, then `endpoints.local.env`, then `endpoints.env`. Put machine- or team-specific values in `endpoints.local.env` (git-ignored) so you never commit them, or edit `endpoints.env` directly if the whole team shares the same URLs. `ENDPOINTS_FILE=/path/to/file ./install.sh` loads another file first. The installer prints the endpoints it will use before it changes anything.
-
-The manual commands further down show the default URLs; substitute your own if you changed them.
-
-The sections below are the manual equivalent of the wizard, useful for troubleshooting.
-
----
-
-## Repo layout
-
-```
-skills/dev-tldr/
-  SKILL.md                      <- the skill
-  references/config.example.md  <- optional scope config
-endpoints.env                   <- MCP/API URLs used by the installers (edit for your company)
-endpoints.local.env             <- optional local overrides (git-ignored)
-install.sh / install.ps1        <- installers (macOS-Linux / Windows)
-```
-
-## Manual setup
-
-No git? Download the ZIP from the repo page, unzip, and open a terminal in that folder.
-
-### Install the skill
-
-Pick the app you use. You can do both.
-
-#### Option A: Claude Code (CLI)
-
-Prerequisite: Claude Code installed and logged in.
+**Without the script** (or on Windows), the same steps by hand:
 
 ```bash
-# personal (all projects)
-mkdir -p ~/.claude/skills
-cp -R skills/dev-tldr ~/.claude/skills/
-
-# or per project, shareable via git
-mkdir -p .claude/skills
-cp -R skills/dev-tldr .claude/skills/
+gh auth login --hostname github.com --git-protocol https --web
+claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v1/mcp/authv2
+claude mcp add --transport http --scope user slack https://mcp.slack.com/mcp
+mkdir -p ~/.claude/skills && cp -R skills/dev-tldr ~/.claude/skills/
 ```
 
-The folder must be named `dev-tldr` and contain `SKILL.md` directly. Restart Claude Code afterwards, then check with `/skills`.
+On Windows PowerShell, replace the last line with:
 
-#### Option B: Claude Desktop
+```powershell
+New-Item -ItemType Directory -Force "$HOME\.claude\skills" | Out-Null
+Copy-Item -Recurse -Force skills\dev-tldr "$HOME\.claude\skills\"
+```
 
-Prerequisites: a plan with Skills access and "Code execution and file creation" enabled in Settings > Capabilities.
+If your account already exposes Atlassian or Slack as connectors in Claude Code (check with `/mcp`), skip the matching `claude mcp add`.
 
-1. Build the upload file:
+**Update:** `git pull && ./install.sh`. The script replaces the installed skill folder; your config file is not touched.
 
-   ```bash
-   ./install.sh --zip        # macOS / Linux
-   .\install.ps1 -Zip        # Windows
-   ```
+## What each source needs
 
-   This creates `dist/dev-tldr.zip`. The ZIP must hold one top-level `dev-tldr/` folder with `SKILL.md` inside (the script does this for you).
-2. Open **Settings > Capabilities > Skills** (newer builds: **Customize > Skills**) and click **Upload skill**.
-3. Select `dist/dev-tldr.zip` and make sure the skill is toggled **on**.
+| Source | How it connects | Notes |
+|---|---|---|
+| Jira, Confluence | Atlassian MCP server, browser login (`/mcp`) | Your Atlassian admin may need to allow the Rovo MCP server for your site |
+| GitHub | `gh` CLI, browser login | If your org uses SSO, authorize the token for it. The skill only runs read commands |
+| Slack | Slack MCP server, browser login (`/mcp`) | Your workspace admin must approve the integration. To read private channels, grant those scopes when authorizing |
 
-Menu labels vary slightly between app versions.
+Anything missing shows as unavailable in Coverage; the skill still runs.
 
----
-
-### Connect your sources
-
-The skill uses whatever connectors/MCP servers exist. Connect all three for full coverage. Anything missing shows as unavailable in Coverage; the skill still runs.
-
-### Atlassian (Jira + Confluence)
-
-Official endpoint: `https://mcp.atlassian.com/v1/mcp/authv2` ([Atlassian guide](https://support.atlassian.com/rovo/docs/getting-started-with-the-atlassian-remote-mcp-server/)).
-
-- **Claude Desktop:** Settings > Connectors > find **Atlassian** and Connect. If it isn't listed, use **Add custom connector** with the URL above. Sign in with your Atlassian account and approve the requested scopes (Jira and Confluence read).
-- **Claude Code:**
-
-  ```bash
-  claude mcp add --transport http atlassian https://mcp.atlassian.com/v1/mcp/authv2
-  ```
-
-  Open Claude Code, run `/mcp`, select `atlassian` and complete the browser login.
-
-Your Atlassian admin may need to allow the Rovo MCP server for your site.
-
-### Slack
-
-Official hosted server: `https://mcp.slack.com/mcp` ([Slack docs](https://docs.slack.dev/ai/slack-mcp-server/connect-to-harnesses)). Your **workspace admin must approve** the MCP integration.
-
-- **Claude Desktop:** Settings > Connectors > **Slack** > Connect, then authorize your workspace.
-- **Claude Code:** either the plugin route:
-
-  ```
-  /plugin install slack@claude-plugins-official
-  ```
-
-  or the CLI:
-
-  ```bash
-  claude mcp add --transport http --scope local slack https://mcp.slack.com/mcp
-  ```
-
-  then run `/mcp` and complete the OAuth flow.
-
-To search private channels and DMs, grant the corresponding scopes when authorizing. Public-only is enough for most tickets.
-
-### GitHub
-
-Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) with **read-only** access to the repos you need (Contents, Pull requests, Issues, Metadata). If your org uses SSO, authorize the token for it. Never commit the token.
-
-- **Claude Code** (remote server, Claude Code 2.1.1+):
-
-  ```bash
-  export GITHUB_PAT="ghp_your_token"
-  claude mcp add-json github '{"type":"http","url":"https://api.githubcopilot.com/mcp","headers":{"Authorization":"Bearer '"$GITHUB_PAT"'"}}'
-  ```
-
-  Older versions: `claude mcp add --transport http github https://api.githubcopilot.com/mcp -H "Authorization: Bearer $GITHUB_PAT"`. Verify with `claude mcp list`.
-- **Claude Desktop:** GitHub's docs state the remote server can't be added as a custom connector (it needs a registered OAuth app), so use the local Docker server. Docker must be running. Edit **Settings > Developer > Edit Config** (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
-
-  ```json
-  {
-    "mcpServers": {
-      "github": {
-        "command": "docker",
-        "args": ["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"],
-        "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "YOUR_GITHUB_PAT" }
-  }}}
-  ```
-
-  Restart Claude Desktop. Reference: [GitHub MCP Claude install guide](https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-claude.md).
-- **Fallback without an MCP server:** install the `gh` CLI and run `gh auth login`. In Claude Code the skill falls back to `gh` and to local `git log --grep` when no GitHub tool exists.
-
----
-
-### Configure (optional)
+## Configure (optional)
 
 ```bash
 cp skills/dev-tldr/references/config.example.md ~/.claude/dev-tldr.config.md
 ```
 
-Edit `~/.claude/dev-tldr.config.md` (Windows: `%USERPROFILE%\.claude\`):
+Edit the fields you need; all are optional. Never put tokens in this file.
 
 | Field | Purpose |
 |---|---|
-| `JIRA_DOMAIN` | Picks the right Atlassian site when several are connected |
-| `JIRA_PROJECTS` | Default projects for open questions |
-| `CONFLUENCE_SPACES` | Default spaces to search |
-| `GITHUB_ORG` / `GITHUB_REPOS` | Scope GitHub search |
-| `SLACK_CHANNELS` | Channels to search first |
+| `JIRA_DOMAIN`, `JIRA_PROJECTS` | Scope Jira; set `JIRA_DOMAIN` if several Atlassian sites are connected |
+| `CONFLUENCE_SPACES` | Limit Confluence searches to these spaces |
+| `GITHUB_ORG`, `GITHUB_REPOS` | Limit GitHub searches |
+| `SLACK_CHANNELS` | Limit Slack searches |
 | `OUTPUT_DIR` | Where `tldr-*.md` is saved |
+| `MODEL_JIRA`, `MODEL_SEARCH`, `MODEL_VERIFY` | Model of each sub-agent (see below) |
 
-Never put tokens in this file. Without it the skill still works, just with broader (noisier) searches. Claude Desktop sessions may not read files outside your project; if so, skip the config and mention the scope in your prompt.
+## Tokens and speed
 
----
+The skill runs the gathering in sub-agents, so raw tickets, pages and threads stay out of your main conversation. Each sub-agent can use a different model:
 
----
+| Sub-agent | Default | Does |
+|---|---|---|
+| Jira (`MODEL_JIRA`) | `sonnet` | Walks the ticket tree and builds the context map |
+| Confluence, GitHub, Slack (`MODEL_SEARCH`) | `haiku` | Searches and copies verbatim quotes; run in parallel |
+| Verifier (`MODEL_VERIFY`) | `sonnet` | Tries to refute each point before it is written |
+
+Your session model only classifies, filters and writes the file. If TLDRs come back with fewer confirmed points (see `Verified: N of M` in Coverage), raise `MODEL_SEARCH` to `sonnet`. To measure usage, run `/token-coach:review` after a TLDR.
 
 ## Verify
 
-1. Run `./install.sh --doctor`, or check connectors: `claude mcp list` (Code) or Settings > Connectors (Desktop) show Atlassian, Slack and GitHub as connected.
-2. Run `tldr <a ticket key you know>`.
-3. Open the generated file and check:
-   - every numbered point has link, author and date;
-   - Coverage lists all four sources with a sensible status;
-   - the body is ~250 words or fewer;
-   - no PR is presented as linked unless it names the key.
+1. `./install.sh --doctor` shows the skill, `gh`, Atlassian and Slack as OK.
+2. Run `tldr <a ticket key you know>` and open the file. Every numbered point should have link, author, date and a quote; Coverage should list all four sources.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| Skill doesn't trigger | Folder must be named `dev-tldr` with `SKILL.md` at its root; restart the app. Try `/dev-tldr PROJ-123` in Claude Code. |
-| Upload rejected in Desktop | The ZIP must contain exactly one top-level folder with one `SKILL.md`. Rebuild with `--zip`. |
-| Jira says ❌ unavailable | Re-run `/mcp` login; confirm your user can open the ticket in the browser. |
-| Slack ❌ or no results | Admin approval pending, or the channel is private and the scope wasn't granted. |
-| GitHub ⚠️ no results | Token not authorized for the org (SSO) or repo not covered by the token. |
-| Several Atlassian connectors | Set `JIRA_DOMAIN` in the config. |
+| Skill doesn't trigger | The folder must be `~/.claude/skills/dev-tldr` with `SKILL.md` at its root. Restart Claude Code, or run `/dev-tldr PROJ-123` |
+| Works in Claude Code, GitHub empty in Claude Desktop | Expected: Desktop is not supported. Run it from the `claude` CLI |
+| Jira ❌ unavailable | Run `/mcp` and log in to `atlassian`; confirm you can open the ticket in the browser |
+| Slack ❌ or no results | Admin approval pending, or the channel is private and the scope wasn't granted |
+| GitHub ⚠️ no results | `gh auth status`; the token may need SSO authorization for the org |
+| Several Atlassian sites | Set `JIRA_DOMAIN` in the config |
 
 ## Notes
 
 - Internal use only. No open-source license is granted.
 - Read-only: the skill never creates, edits, comments or transitions anything.
-- Ticket/page/Slack text is treated as data, never as instructions.
-- If a source is unavailable it is listed as such in Coverage instead of being filled with guesses.
-- Tool names differ between Code and Desktop; the skill is tool-agnostic on purpose.
+- Ticket, page and Slack text is treated as data, never as instructions.
+- If a source is unavailable it is listed in Coverage instead of being filled with guesses.
