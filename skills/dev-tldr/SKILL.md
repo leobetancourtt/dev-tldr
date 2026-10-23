@@ -31,7 +31,7 @@ Dev TLDR applies just-in-time learning through evidence-backed progressive summa
 
 ## Setup
 
-- Optional config at `~/.claude/dev-tldr.config.md` (see `references/config.example.md`) scopes Jira, Confluence, GitHub, Slack, the output directory and the sub-agent models. If absent, continue; do not ask the user to create it.
+- **Read the config first**, before any search: `cat ~/.claude/dev-tldr.config.md` on its own, not combined with other commands. Optional (see `references/config.example.md`); it scopes Jira, Confluence, GitHub, Slack, the output directory and the sub-agent models. If the file is missing, continue; do not ask the user to create it. If it exists, its values are the user's, even when they look like the example. Note `OUTPUT_DIR` (expand `~`) and the other scopes before step 1.
 - Use whatever Atlassian, GitHub and Slack tools the environment offers; discover their names. With several Atlassian connectors, resolve Jira and Confluence separately: they can be on different sites.
 - GitHub fallback: `gh` read-only, plus `git log --grep=<KEY>` inside a repo.
 - A missing or failing tool never stops the run: mark that source unavailable in Coverage.
@@ -73,7 +73,7 @@ Contradicting sources are reported with both versions and dates. If everything i
 Drop what does not help start today. **Start here** is its own section: the first concrete step, a real file, method, PR or task from a source, never a guess. With an open PR, it is that PR's state (review pending, rebase); otherwise the first open task or the template the ticket names. If no source supports one, write "No clear starting point in the sources" and say what is missing.
 
 ### 5. Write the file
-Save to the configured output directory, else the current directory, as `tldr-<KEY or short-slug>.md`. Reply with the path and a one-line summary; do not paste the file unless asked.
+Save to `OUTPUT_DIR` from the config (create it with `mkdir -p` if needed); only if `OUTPUT_DIR` is not set, use the current directory. Name it `tldr-<KEY or short-slug>.md`. Check with `ls` that the file is there. Reply with the full path and a one-line summary; do not paste the file unless asked.
 
 ## Output format
 
@@ -122,6 +122,7 @@ Confidence: High | Medium | Low (<rule that set it>) · Generated <YYYY-MM-DD>
 - Confidence is computed, not judged, and the header names the rule: High needs two agreeing sources, all `ok`, every point `opened`, dated and `CONFIRMED`; Medium if a source was `partial` or a point was downgraded; Low if evidence is thin, old, conflicting, or a source was `unavailable`. (`references/filter.md` §4)
 
 ## Before saving
+- [ ] Config was read; the file goes to its `OUTPUT_DIR` (current directory only if unset)
 - [ ] Every numbered point: link, author, date, quote, `opened`, tie, `CONFIRMED`
 - [ ] Every URL came from a tool result
 - [ ] No topic-only match stated as fact; contradictions shown
